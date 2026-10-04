@@ -17,7 +17,7 @@ DIR_PREPARADOS = DIR_DADOS / "preparados"
 
 FICHEIRO_GPKG_BRUTO = DIR_ORIGINAIS / "fogos.gpkg"
 
-FICHEIRO_SAIDA = DIR_PROCESSADOS / "fogos.parquet"
+FICHEIRO_FOGOS = DIR_PROCESSADOS / "fogos.parquet"
 FICHEIRO_EVOLUCAO_ANUAL = DIR_PREPARADOS / "evolucao_anual.parquet"
 FICHEIRO_DISTRIBUICAO_GEO = DIR_PREPARADOS / "distribuicao_geografica.parquet"
 FICHEIRO_DISTRIBUICAO_GEO_RECENTE = (
@@ -31,14 +31,14 @@ CSS_ESTILOS = DIR_RAIZ / "static" / "style.css"
 # SUPABASE
 # =============================================================================
 BUCKET_SUPABASE = "dados"
+MANIFEST_SUPABASE = "manifest.json"
 
 FICHEIROS_SUPABASE = {
-    FICHEIRO_SAIDA: "fogos.parquet",
+    FICHEIRO_FOGOS: "fogos.parquet",
     FICHEIRO_EVOLUCAO_ANUAL: "evolucao_anual.parquet",
     FICHEIRO_DISTRIBUICAO_GEO: "distribuicao_geografica.parquet",
     FICHEIRO_DISTRIBUICAO_GEO_RECENTE: "distribuicao_geografica_recente.parquet",
 }
-
 
 # =============================================================================
 # FONTE DE DADOS (ICNF)
@@ -55,9 +55,9 @@ HEADERS_DOWNLOAD = {
 }
 
 TIMEOUT_DOWNLOAD = (30, 300)
+TIMEOUT_METADADOS = (30, 60)
 TENTATIVAS_DOWNLOAD = 3
 CHUNK_SIZE_DOWNLOAD = 1024 * 1024  # 1 MB
-
 
 # =============================================================================
 # COLUNAS
@@ -70,7 +70,6 @@ COLUNAS_PADRAO = [
     "fwi",
     "Lat_4326", "Lon_4326",
 ]
-
 
 # =============================================================================
 # PROCESSAMENTO
@@ -87,12 +86,10 @@ LIMITE_KM_CONCELHO = 40
 
 LARGURA_HEXAGONO_KM = 3
 
-
 # =============================================================================
 # PREPARAÇÃO
 # =============================================================================
 ANOS_RECENTES = 11
-
 
 # =============================================================================
 # INTERFACE
@@ -106,3 +103,14 @@ LABELS_CLASSE_AREA = {
     "[Area500-1000]": "500 a 1 000 ha",
     "[Area+1000]": "Mais de 1 000 ha",
 }
+
+PALETA = [
+    "#32A836",
+    "#FEE91A",
+    "#F38200",
+    "#D83E39",
+    "#8A364D",
+]
+
+# Tamanho da letra (px) das caixas de hover dos gráficos
+FONT_HOVER = 16

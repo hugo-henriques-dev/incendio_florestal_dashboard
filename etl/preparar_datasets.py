@@ -6,12 +6,12 @@ import geopandas as gpd
 import pandas as pd
 
 from constantes import (
-    FICHEIRO_SAIDA,
+    ANOS_RECENTES,
     DIR_PREPARADOS,
-    FICHEIRO_EVOLUCAO_ANUAL,
     FICHEIRO_DISTRIBUICAO_GEO,
     FICHEIRO_DISTRIBUICAO_GEO_RECENTE,
-    ANOS_RECENTES
+    FICHEIRO_EVOLUCAO_ANUAL,
+    FICHEIRO_FOGOS
 )
 from etl.processar_dados import agregar_em_hexagonos
 
@@ -30,13 +30,15 @@ def preparar_evolucao_anual():
     print("A carregar dados processados...")
 
     dados = pd.read_parquet(
-        FICHEIRO_SAIDA,
+        FICHEIRO_FOGOS,
         columns=["Codigo", "Ano", "AreaTotal"],
     )
 
     print(f"Ocorrências carregadas: {len(dados)}")
     print("A calcular indicadores anuais...")
 
+    # O sum ignora as áreas nulas (estimadas), por isso AreaHa só
+    # contabiliza a área conhecida
     dados = (
         dados.groupby("Ano")
         .agg(
@@ -45,7 +47,7 @@ def preparar_evolucao_anual():
         )
         .reset_index()
     )
-    
+
     dados["AreaMilHa"] = dados["AreaHa"] / 1000
 
     DIR_PREPARADOS.mkdir(parents=True, exist_ok=True)
@@ -68,7 +70,7 @@ def preparar_distribuicao_geo():
     print("\n" + "=" * 50)
     print("A preparar distribuição geográfica em hexágonos...")
 
-    gdf = gpd.read_parquet(FICHEIRO_SAIDA)
+    gdf = gpd.read_parquet(FICHEIRO_FOGOS)
 
     resultado = agregar_em_hexagonos(gdf)
 
@@ -91,8 +93,10 @@ def preparar_distribuicao_geo_recente():
     print("\n" + "=" * 50)
     print(f"A preparar distribuição geográfica dos últimos {ANOS_RECENTES} anos...")
 
-    gdf = gpd.read_parquet(FICHEIRO_SAIDA)
+    gdf = gpd.read_parquet(FICHEIRO_FOGOS)
 
+    # A janela conta com o último ano disponível (ver streamlit_app.py,
+    # que usa o mesmo cálculo para decidir se usa este dataset)
     ano_max = gdf["Ano"].max()
     ano_min_recente = ano_max - ANOS_RECENTES + 1
 
@@ -118,7 +122,7 @@ def preparar_todos_datasets():
     preparar_evolucao_anual()
     preparar_distribuicao_geo()
     preparar_distribuicao_geo_recente()
-    
+
     print("\n" + "=" * 50)
     print("TODOS OS DATASETS PREPARADOS!")
     print("=" * 50)

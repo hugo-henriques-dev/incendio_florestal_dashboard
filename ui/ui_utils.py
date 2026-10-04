@@ -28,6 +28,7 @@ def obter_distrito_top_causa(distritos_causa, tipo_causa):
     :param tipo_causa: Valor de TipoCausa a filtrar (ex.: "Intencional").
     :returns: Series correspondente ao distrito com mais ocorrências
         desse tipo de causa.
+    :raises IndexError: Se não existirem linhas para o tipo de causa.
     """
     return (
         distritos_causa[distritos_causa["TipoCausa"] == tipo_causa]
@@ -44,6 +45,7 @@ def mostrar_metricas(metricas):
         opcionalmente, "help".
     :returns: None.
     """
+    # Cada bloco de 3 métricas é uma nova linha de colunas
     for i in range(0, len(metricas), 3):
         colunas = st.columns(3)
 

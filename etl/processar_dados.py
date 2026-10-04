@@ -1,26 +1,27 @@
 """
-Processa o GeoPackage bruto do ICNF, selecionando e normalizando os campos
-necessários para o dashboard.
+Processa o GeoPackage bruto do ICNF, normalizando os campos necessários
+para o dashboard, e disponibiliza as funções de agregação em hexágonos
+e de classificação do FWI.
 
 As regras de limpeza aplicadas aqui resultam da exploração feita em
 ferramentas/validar_dados.py.
 """
 
 import geopandas as gpd
-import pandas as pd
-from shapely.geometry import Polygon
 import numpy as np
+import pandas as pd
+import shapely
 
 from constantes import (
-    COLUNAS_PADRAO,
-    FICHEIRO_GPKG_BRUTO,
-    FICHEIRO_SAIDA,
-    DIR_PROCESSADOS,
     COLUNAS_AUXILIARES_DURACAO,
+    COLUNAS_PADRAO,
+    DIR_PROCESSADOS,
+    FICHEIRO_GPKG_BRUTO,
+    FICHEIRO_FOGOS,
     LARGURA_HEXAGONO_KM,
     LIMITE_AREA_HA_SUSPEITO,
     LIMITE_HORAS_SUSPEITO,
-    LIMITE_KM_CONCELHO,
+    LIMITE_KM_CONCELHO
 )
 
 
@@ -61,6 +62,7 @@ def construir_geometria(df):
     """
     mascara_valida = df["Lat_4326"].notna() & df["Lon_4326"].notna()
 
+    # Parte de tudo a None e só preenche os registos com coordenadas
     geometria = gpd.GeoSeries([None] * len(df), index=df.index, crs="EPSG:4326")
     geometria.loc[mascara_valida] = gpd.points_from_xy(
         df.loc[mascara_valida, "Lon_4326"],
@@ -74,13 +76,19 @@ def corrigir_duracao_suspeita(gdf):
     """
     Anula a DuracaoHoras dos registos com padrão de erro de registo.
 
-    Casos com DuracaoHoras > 720h e AreaTotal < 50ha em que
-    DH1Intervencao, DHResolucao e DHConclusao estão todos vazios
-    mostram um padrão sistemático em que DHFim cai no mesmo dia/hora
-    que DHInicio, meses depois.
+    Um registo é suspeito quando:
+
+    - DuracaoHoras excede LIMITE_HORAS_SUSPEITO;
+    - AreaTotal é inferior a LIMITE_AREA_HA_SUSPEITO;
+    - DH1Intervencao, DHResolucao e DHConclusao estão todos vazios.
+
+    Nestes casos, DHFim cai sistematicamente no mesmo dia/hora que
+    DHInicio, meses depois.
+
+    Altera o GeoDataFrame recebido e devolve o mesmo objeto.
 
     :param gdf: GeoDataFrame a corrigir.
-    :returns: GeoDataFrame com DuracaoHoras corrigida.
+    :returns: O próprio GeoDataFrame, com DuracaoHoras corrigida.
     """
     suspeitos = (
         (gdf["DuracaoHoras"] > LIMITE_HORAS_SUSPEITO)
@@ -106,8 +114,10 @@ def corrigir_coordenadas_suspeitas(df):
     evidência de contaminação da mediana pelos próprios casos suspeitos
     (ver ferramentas/verificar_referencias_caop.py).
 
+    Não altera o DataFrame recebido: devolve um novo.
+
     :param df: DataFrame a corrigir.
-    :returns: DataFrame com Lat_4326/Lon_4326 corrigidas.
+    :returns: Novo DataFrame com Lat_4326/Lon_4326 corrigidas.
     """
     com_coordenadas = df.dropna(subset=["Lat_4326", "Lon_4326", "Concelho"])
 
@@ -119,6 +129,8 @@ def corrigir_coordenadas_suspeitas(df):
 
     df = df.join(referencias, on="Concelho")
 
+    # Distância aproximada em km: 1° de latitude ≈ 111 km e 1° de longitude
+    # ≈ 85 km à latitude de Portugal continental
     dist_km = (
         ((df["Lat_4326"] - df["Lat_ref"]) * 111) ** 2
         + ((df["Lon_4326"] - df["Lon_ref"]) * 85) ** 2
@@ -143,15 +155,14 @@ def agregar_em_hexagonos(gdf):
     :returns: GeoDataFrame com os hexágonos e o número de ocorrências
         em cada um.
     """
-    gdf = gdf[gdf.geometry.notna()]
-
-    gdf_proj = gdf.to_crs("EPSG:3763")
+    pontos = gdf.geometry[gdf.geometry.notna()].to_crs("EPSG:3763")
 
     # Para um hexágono flat-top, a largura de lado a lado é 2 * lado.
     lado = (LARGURA_HEXAGONO_KM * 1000) / 2
 
-    x = gdf_proj.geometry.x.to_numpy()
-    y = gdf_proj.geometry.y.to_numpy()
+    # ====== Atribuição de cada ocorrência a um hexágono ======
+    x = pontos.x.to_numpy()
+    y = pontos.y.to_numpy()
 
     # Coordenadas axiais do sistema hexagonal.
     q = (2 / 3) * x / lado
@@ -170,17 +181,20 @@ def agregar_em_hexagonos(gdf):
     q_final = q_round.copy()
     r_final = r_round.copy()
 
+    # Recalcula a coordenada com maior erro de arredondamento, para
+    # manter q + r + s = 0
     mascara_q = (dq > dr) & (dq > ds)
     mascara_r = (dr > dq) & (dr > ds)
 
     q_final[mascara_q] = -r_round[mascara_q] - s_round[mascara_q]
     r_final[mascara_r] = -q_round[mascara_r] - s_round[mascara_r]
 
-    gdf_proj["hex_q"] = q_final.astype(int)
-    gdf_proj["hex_r"] = r_final.astype(int)
-
+    # ====== Contagem e geometria dos hexágonos ======
     agregados = (
-        gdf_proj
+        pd.DataFrame({
+            "hex_q": q_final.astype(int),
+            "hex_r": r_final.astype(int),
+        })
         .groupby(["hex_q", "hex_r"])
         .size()
         .reset_index(name="Ocorrencias")
@@ -195,22 +209,12 @@ def agregar_em_hexagonos(gdf):
         * (agregados["hex_r"] + agregados["hex_q"] / 2)
     )
 
-    geometrias = []
+    # Vértices de todos os hexágonos de uma vez: um array (n, 6, 2)
+    angulos = np.radians(np.arange(0, 360, 60))
+    vertices_x = agregados["CentroX"].to_numpy()[:, None] + lado * np.cos(angulos)
+    vertices_y = agregados["CentroY"].to_numpy()[:, None] + lado * np.sin(angulos)
 
-    for x_centro, y_centro in zip(
-        agregados["CentroX"],
-        agregados["CentroY"],
-    ):
-        angulos = np.arange(0, 360, 60)
-        vertices = [
-            (
-                x_centro + lado * np.cos(np.radians(angulo)),
-                y_centro + lado * np.sin(np.radians(angulo)),
-            )
-            for angulo in angulos
-        ]
-
-        geometrias.append(Polygon(vertices))
+    geometrias = shapely.polygons(np.stack([vertices_x, vertices_y], axis=-1))
 
     return gpd.GeoDataFrame(
         agregados[["Ocorrencias"]],
@@ -255,6 +259,8 @@ def processar_dados():
     df["Ano"] = df["Ano"].astype(int)
     df["Mes"] = df["Mes"].astype(int)
 
+    # As coordenadas suspeitas são anuladas antes de construir a geometria,
+    # para que esses registos fiquem sem geometria
     print("A construir geometria a partir de Lat_4326/Lon_4326...")
     df = corrigir_coordenadas_suspeitas(df)
     gdf = construir_geometria(df)
@@ -274,10 +280,10 @@ def processar_dados():
     
     gdf["ClasseFWI"] = df["fwi"].apply(classificar_fwi)
 
-    gdf.to_parquet(FICHEIRO_SAIDA, index=False)
+    gdf.to_parquet(FICHEIRO_FOGOS, index=False)
 
     print("\nDADOS PROCESSADOS!")
-    print(f"Ficheiro: {FICHEIRO_SAIDA}")
+    print(f"Ficheiro: {FICHEIRO_FOGOS}")
     print(f"Registos finais: {len(gdf)}")
     print(f"Registos sem geometria válida: {gdf.geometry.isna().sum()}")
 

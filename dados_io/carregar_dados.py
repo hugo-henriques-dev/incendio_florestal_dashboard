@@ -14,11 +14,11 @@ from constantes import (
     FICHEIRO_DISTRIBUICAO_GEO,
     FICHEIRO_DISTRIBUICAO_GEO_RECENTE,
     FICHEIRO_EVOLUCAO_ANUAL,
-    FICHEIRO_SAIDA,
+    FICHEIRO_FOGOS,
 )
 
 
-def _obter_url_publica(nome_ficheiro: str) -> str | None:
+def _obter_url_publica(nome_ficheiro):
     """
     Constrói o URL público de um ficheiro no Supabase Storage.
 
@@ -37,7 +37,7 @@ def _obter_url_publica(nome_ficheiro: str) -> str | None:
     )
 
 
-def _descarregar_ficheiro(nome_ficheiro: str) -> BytesIO:
+def _descarregar_ficheiro(nome_ficheiro):
     """
     Descarrega um ficheiro do Supabase Storage para memória.
 
@@ -48,10 +48,9 @@ def _descarregar_ficheiro(nome_ficheiro: str) -> BytesIO:
     url = _obter_url_publica(nome_ficheiro)
 
     if not url:
-        raise RuntimeError(
-            "SUPABASE_URL não está definida nos secrets."
-        )
+        raise RuntimeError("SUPABASE_URL não está definida nos secrets.")
 
+    # O User-Agent identifica a aplicação nos pedidos ao Supabase
     pedido = Request(
         url,
         headers={"User-Agent": "Incendios-Florestais-PT"},
@@ -67,6 +66,8 @@ def _descarregar_ficheiro(nome_ficheiro: str) -> BytesIO:
         ) from erro
 
 
+# Nas funções seguintes, o ficheiro local tem prioridade (desenvolvimento);
+# o Supabase é o fallback quando a aplicação corre sem os dados locais
 @st.cache_data
 def carregar_ocorrencias():
     """
@@ -77,8 +78,8 @@ def carregar_ocorrencias():
 
     :returns: GeoDataFrame com as ocorrências.
     """
-    if FICHEIRO_SAIDA.exists():
-        return gpd.read_parquet(FICHEIRO_SAIDA)
+    if FICHEIRO_FOGOS.exists():
+        return gpd.read_parquet(FICHEIRO_FOGOS)
 
     return gpd.read_parquet(_descarregar_ficheiro("fogos.parquet"))
 
@@ -134,7 +135,5 @@ def carregar_distribuicao_geo_recente():
         return gpd.read_parquet(FICHEIRO_DISTRIBUICAO_GEO_RECENTE)
 
     return gpd.read_parquet(
-        _descarregar_ficheiro(
-            "distribuicao_geografica_recente.parquet"
-        )
+        _descarregar_ficheiro("distribuicao_geografica_recente.parquet")
     )

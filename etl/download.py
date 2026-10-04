@@ -12,16 +12,13 @@ import requests
 from tqdm import tqdm
 
 from constantes import (
-    HEADERS_DOWNLOAD,
-    TIMEOUT_DOWNLOAD,
-    TENTATIVAS_DOWNLOAD,
     CHUNK_SIZE_DOWNLOAD,
+    HEADERS_DOWNLOAD,
+    TENTATIVAS_DOWNLOAD,
+    TIMEOUT_DOWNLOAD,
+    TIMEOUT_METADADOS
 )
 
-
-# -------------------------------------------------------------------------
-# Verificação da fonte
-# -------------------------------------------------------------------------
 
 def obter_metadados_remotos(url):
     """
@@ -38,7 +35,7 @@ def obter_metadados_remotos(url):
         resposta = requests.head(
             url,
             headers=HEADERS_DOWNLOAD,
-            timeout=(30, 60),
+            timeout=TIMEOUT_METADADOS,
             allow_redirects=True,
         )
 
@@ -50,11 +47,7 @@ def obter_metadados_remotos(url):
             "url": resposta.url,
             "etag": resposta.headers.get("ETag"),
             "last_modified": resposta.headers.get("Last-Modified"),
-            "content_length": (
-                int(tamanho)
-                if tamanho is not None
-                else None
-            ),
+            "content_length": int(tamanho) if tamanho is not None else None,
         }
 
     except requests.RequestException as erro:
@@ -101,6 +94,8 @@ def guardar_metadados(caminho, metadados):
 
     ficheiro_temporario = Path(f"{caminho}.part")
 
+    # Escreve num ficheiro temporário e só depois substitui o original,
+    # para nunca ficar um JSON a meio em caso de falha
     with open(ficheiro_temporario, "w", encoding="utf-8") as ficheiro:
         json.dump(
             metadados,
@@ -140,17 +135,18 @@ def fonte_foi_atualizada(metadados_locais, metadados_remotos):
     last_modified_local = metadados_locais.get("last_modified")
     last_modified_remoto = metadados_remotos.get("last_modified")
 
+    tamanhos_validos = (
+        tamanho_local is not None
+        and tamanho_remoto is not None
+    )
+
     # O ICNF disponibiliza ETag, pelo que esta é a comparação principal.
     if etag_local and etag_remoto:
         if etag_local != etag_remoto:
             return True
 
-        if (
-            tamanho_local is not None
-            and tamanho_remoto is not None
-            and tamanho_local != tamanho_remoto
-        ):
-            return True
+        if tamanhos_validos:
+            return tamanho_local != tamanho_remoto
 
         return False
 
@@ -159,28 +155,17 @@ def fonte_foi_atualizada(metadados_locais, metadados_remotos):
         if last_modified_local != last_modified_remoto:
             return True
 
-        if (
-            tamanho_local is not None
-            and tamanho_remoto is not None
-            and tamanho_local != tamanho_remoto
-        ):
-            return True
+        if tamanhos_validos:
+            return tamanho_local != tamanho_remoto
 
         return False
 
     # Último recurso: comparar apenas o tamanho.
-    if (
-        tamanho_local is not None
-        and tamanho_remoto is not None
-    ):
+    if tamanhos_validos:
         return tamanho_local != tamanho_remoto
 
     return None
 
-
-# -------------------------------------------------------------------------
-# Download e validação
-# -------------------------------------------------------------------------
 
 def validar_tamanho(ficheiro, tamanho_esperado):
     """
@@ -218,6 +203,7 @@ def validar_geopackage(ficheiro):
     base_dados = None
 
     try:
+        # Abre em modo só de leitura
         caminho_uri = (f"file:{ficheiro.resolve()}?mode=ro")
 
         base_dados = sqlite3.connect(
@@ -229,6 +215,7 @@ def validar_geopackage(ficheiro):
             "PRAGMA application_id;"
         ).fetchone()[0]
 
+        # 0x47504B47 é "GPKG" em ASCII, o identificador do formato
         if application_id != 0x47504B47:
             raise RuntimeError(
                 "O ficheiro descarregado não parece ser "
@@ -253,6 +240,132 @@ def validar_geopackage(ficheiro):
     finally:
         if base_dados is not None:
             base_dados.close()
+
+
+def _preparar_descarga_parcial(
+    ficheiro_temporario,
+    ficheiro_metadados_parciais,
+    metadados_remotos,
+):
+    """
+    Decide se uma descarga parcial anterior pode ser retomada e elimina-a
+    quando não pode.
+
+    Uma parcial só é reutilizada se pertencer à versão remota atual e não
+    for maior do que o tamanho esperado. Quando não existe parcial, guarda
+    a identificação da versão que vai ser descarregada.
+
+    :param ficheiro_temporario: Caminho do ficheiro parcial (.part).
+    :param ficheiro_metadados_parciais: Caminho dos metadados da parcial.
+    :param metadados_remotos: Metadados da versão remota.
+    """
+    tamanho_esperado = metadados_remotos.get("content_length")
+
+    if ficheiro_temporario.exists():
+        metadados_parciais = carregar_metadados(ficheiro_metadados_parciais)
+
+        # Só retoma se a parcial pertencer à versão remota atual
+        corresponde = (
+            metadados_parciais is not None
+            and fonte_foi_atualizada(
+                metadados_parciais,
+                metadados_remotos,
+            ) is False
+        )
+
+        tamanho_parcial = ficheiro_temporario.stat().st_size
+
+        # Uma parcial maior que o ficheiro esperado está corrompida
+        if tamanho_esperado is not None and tamanho_parcial > tamanho_esperado:
+            corresponde = False
+
+        if not corresponde:
+            print(
+                "A descarga parcial não corresponde à versão atual. "
+                "Será eliminada e reiniciada."
+            )
+
+            ficheiro_temporario.unlink(missing_ok=True)
+            ficheiro_metadados_parciais.unlink(missing_ok=True)
+
+    # Guarda a identificação da versão a que pertence a descarga parcial
+    if not ficheiro_temporario.exists():
+        guardar_metadados(
+            ficheiro_metadados_parciais,
+            metadados_remotos,
+        )
+
+
+def _validar_content_range(content_range, tamanho_atual, tamanho_esperado):
+    """
+    Confirma que uma resposta 206 continua a descarga onde o ficheiro
+    parou e que o ficheiro remoto não mudou.
+
+    O formato esperado do cabeçalho é "bytes <inicio>-<fim>/<total>".
+
+    :param content_range: Valor do cabeçalho Content-Range ou None.
+    :param tamanho_atual: Bytes já existentes no ficheiro parcial.
+    :param tamanho_esperado: Tamanho total esperado em bytes ou None.
+    :raises RuntimeError: Se o cabeçalho faltar, for inválido ou indicar
+        uma retoma incoerente com o ficheiro parcial.
+    """
+    if not content_range:
+        raise RuntimeError(
+            "O servidor respondeu a uma retoma sem "
+            "enviar o cabeçalho Content-Range."
+        )
+
+    partes = content_range.split()
+
+    if len(partes) != 2:
+        raise RuntimeError(
+            "O cabeçalho Content-Range recebido é inválido."
+        )
+
+    intervalo, total = partes[1].split("/")
+
+    inicio = int(intervalo.split("-")[0])
+    tamanho_total_resposta = int(total)
+
+    if inicio != tamanho_atual:
+        raise RuntimeError(
+            "O servidor iniciou a retoma num ponto "
+            "diferente do esperado."
+        )
+
+    if (
+        tamanho_esperado is not None
+        and tamanho_total_resposta != tamanho_esperado
+    ):
+        raise RuntimeError(
+            "O tamanho total do ficheiro mudou durante o download."
+        )
+
+
+def _finalizar_download(
+    ficheiro_temporario,
+    ficheiro_destino,
+    ficheiro_metadados_parciais,
+    tamanho_esperado,
+):
+    """
+    Valida o ficheiro descarregado e promove-o para o destino final.
+
+    :param ficheiro_temporario: Caminho do ficheiro parcial (.part).
+    :param ficheiro_destino: Caminho onde o ficheiro final é guardado.
+    :param ficheiro_metadados_parciais: Caminho dos metadados da parcial.
+    :param tamanho_esperado: Tamanho esperado em bytes ou None.
+    :raises RuntimeError: Se o tamanho ou a integridade não forem válidos.
+    """
+    validar_tamanho(ficheiro_temporario, tamanho_esperado)
+
+    print("A validar o GeoPackage...")
+    validar_geopackage(ficheiro_temporario)
+
+    os.replace(ficheiro_temporario, ficheiro_destino)
+    ficheiro_metadados_parciais.unlink(missing_ok=True)
+
+    print("Download concluído com sucesso.")
 
 
 def descarregar_gpkg(
@@ -289,46 +402,14 @@ def descarregar_gpkg(
     )
 
     ficheiro_temporario = Path(f"{ficheiro_destino}.part")
-
     ficheiro_metadados_parciais = Path(f"{ficheiro_destino}.part.meta.json")
-
     tamanho_esperado = metadados_remotos.get("content_length")
 
-    # Verifica se existe uma descarga parcial.
-    if ficheiro_temporario.exists():
-
-        metadados_parciais = carregar_metadados(ficheiro_metadados_parciais)
-
-        corresponde = (
-            metadados_parciais is not None
-            and fonte_foi_atualizada(
-                metadados_parciais,
-                metadados_remotos,
-            ) is False
-        )
-
-        tamanho_parcial = ficheiro_temporario.stat().st_size
-
-        if tamanho_esperado is not None and tamanho_parcial > tamanho_esperado:
-            corresponde = False
-
-        if not corresponde:
-            print(
-                "A descarga parcial não corresponde à versão atual. "
-                "Será eliminada e reiniciada."
-            )
-
-            ficheiro_temporario.unlink(missing_ok=True)
-
-            ficheiro_metadados_parciais.unlink(missing_ok=True)
-
-    # Guarda a identificação da versão a que pertence
-    # a descarga parcial.
-    if not ficheiro_temporario.exists():
-        guardar_metadados(
-            ficheiro_metadados_parciais,
-            metadados_remotos,
-        )
+    _preparar_descarga_parcial(
+        ficheiro_temporario,
+        ficheiro_metadados_parciais,
+        metadados_remotos,
+    )
 
     ultimo_erro = None
 
@@ -343,21 +424,14 @@ def descarregar_gpkg(
             # Se a parcial já tiver o tamanho esperado,
             # basta validá-la.
             if tamanho_esperado is not None and tamanho_atual == tamanho_esperado:
-                print(
-                    "A descarga parcial já está completa. "
-                    "A validar o GeoPackage..."
-                )
+                print("A descarga parcial já está completa.")
 
-                validar_geopackage(ficheiro_temporario)
-
-                os.replace(
+                _finalizar_download(
                     ficheiro_temporario,
                     ficheiro_destino,
+                    ficheiro_metadados_parciais,
+                    tamanho_esperado,
                 )
-
-                ficheiro_metadados_parciais.unlink(missing_ok=True)
-
-                print("Download concluído com sucesso.")
 
                 return
 
@@ -365,7 +439,8 @@ def descarregar_gpkg(
             retomar = tamanho_atual > 0
 
             if retomar:
-                headers["Range"] = (f"bytes={tamanho_atual}-")
+                # Pede apenas os bytes que faltam
+                headers["Range"] = f"bytes={tamanho_atual}-"
 
                 print(
                     f"A retomar download a partir de "
@@ -388,52 +463,16 @@ def descarregar_gpkg(
             ) as resposta:
 
                 resposta.raise_for_status()
-
                 codigo = resposta.status_code
 
                 if retomar and codigo == 206:
-                    content_range = resposta.headers.get(
-                        "Content-Range"
+                    _validar_content_range(
+                        resposta.headers.get("Content-Range"),
+                        tamanho_atual,
+                        tamanho_esperado,
                     )
 
-                    if not content_range:
-                        raise RuntimeError(
-                            "O servidor respondeu a uma retoma sem "
-                            "enviar o cabeçalho Content-Range."
-                        )
-
-                    partes = content_range.split()
-
-                    if len(partes) != 2:
-                        raise RuntimeError(
-                            "O cabeçalho Content-Range recebido "
-                            "é inválido."
-                        )
-
-                    intervalo, total = partes[1].split("/")
-
-                    inicio = int(
-                        intervalo.split("-")[0]
-                    )
-
-                    tamanho_total_resposta = int(total)
-
-                    if inicio != tamanho_atual:
-                        raise RuntimeError(
-                            "O servidor iniciou a retoma num ponto "
-                            "diferente do esperado."
-                        )
-
-                    if (
-                        tamanho_esperado is not None
-                        and tamanho_total_resposta
-                        != tamanho_esperado
-                    ):
-                        raise RuntimeError(
-                            "O tamanho total do ficheiro mudou "
-                            "durante o download."
-                        )
-
+                    # "ab" acrescenta ao ficheiro parcial
                     modo = "ab"
                     tamanho_inicial = tamanho_atual
 
@@ -446,9 +485,12 @@ def descarregar_gpkg(
                             "A descarga será reiniciada."
                         )
 
+                    # "wb" sobrescreve o que existia
                     modo = "wb"
                     tamanho_inicial = 0
 
+                # Sem tamanho vindo do HEAD, estima-o a partir desta resposta
+                # (serve apenas para a barra de progresso)
                 tamanho_total = tamanho_esperado
 
                 if tamanho_total is None:
@@ -463,10 +505,7 @@ def descarregar_gpkg(
                             else int(content_length)
                         )
 
-                with open(
-                    ficheiro_temporario,
-                    modo,
-                ) as ficheiro:
+                with open(ficheiro_temporario, modo) as ficheiro:
 
                     with tqdm(
                         total=tamanho_total,
@@ -489,22 +528,12 @@ def descarregar_gpkg(
                     ficheiro.flush()
                     os.fsync(ficheiro.fileno())
 
-            validar_tamanho(
-                ficheiro_temporario,
-                tamanho_esperado,
-            )
-
-            print("A validar o GeoPackage...")
-
-            validar_geopackage(ficheiro_temporario)
-
-            os.replace(
+            _finalizar_download(
                 ficheiro_temporario,
                 ficheiro_destino,
+                ficheiro_metadados_parciais,
+                tamanho_esperado,
             )
-
-            ficheiro_metadados_parciais.unlink(missing_ok=True)
-            print("Download concluído com sucesso.")
 
             return
 
@@ -516,13 +545,11 @@ def descarregar_gpkg(
         ) as erro:
 
             ultimo_erro = erro
-
             print(f"Erro: {erro}")
 
             if tentativa < tentativas:
-                tempo_espera = (
-                    15 * (2 ** (tentativa - 1))
-                )
+                # Espera exponencial: 15s, 30s, 60s...
+                tempo_espera = 15 * (2 ** (tentativa - 1))
 
                 print(f"A aguardar {tempo_espera}s antes de nova tentativa...")
                 sleep(tempo_espera)

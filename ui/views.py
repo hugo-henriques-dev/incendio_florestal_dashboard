@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from constantes import FONT_HOVER, PALETA
 from ui.ui_utils import (
     formatar_numero,
     mostrar_metricas,
@@ -24,6 +25,7 @@ def mostrar_visao_geral(gdf, dados):
     :param dados: DataFrame com os indicadores agregados por ano.
     :returns: None.
     """
+    # ====== Métricas ======
     total_ocorrencias = len(gdf)
     area_total = gdf["AreaTotal"].sum()
     ano_inicial = gdf["Ano"].min()
@@ -41,11 +43,20 @@ def mostrar_visao_geral(gdf, dados):
     ]
     mais_ocorrencias = dados["Ocorrencias"].max()
 
+    # Registos sem causa ou sem distrito ficam fora desta contagem
     distritos_causa = (
         gdf.dropna(subset=["TipoCausa", "Distrito"])
         .groupby(["Distrito", "TipoCausa"])
         .size()
         .reset_index(name="Ocorrencias")
+    )
+
+    # Aviso mostrado no help das métricas por causa, porque os registos
+    # sem causa não entram nesses valores
+    percent_sem_causa = gdf["TipoCausa"].isna().mean() * 100
+    texto_sem_causa = (
+        f"{percent_sem_causa:.1f}".replace(".", ",")
+        + "% das ocorrências não têm causa preenchida em TipoCausa."
     )
 
     distrito_intencional = obter_distrito_top_causa(distritos_causa, "Intencional")
@@ -89,10 +100,7 @@ def mostrar_visao_geral(gdf, dados):
                 f"{distrito_intencional['Distrito']} "
                 f"({distrito_intencional['Ocorrencias']:,})"
             ).replace(",", " "),
-            "help": (
-                "46,4% das ocorrências não têm causa preenchida "
-                "em TipoCausa."
-            ),
+            "help": texto_sem_causa,
         },
         {
             "titulo": "Distrito com mais ocorrências negligentes",
@@ -100,10 +108,7 @@ def mostrar_visao_geral(gdf, dados):
                 f"{distrito_negligente['Distrito']} "
                 f"({distrito_negligente['Ocorrencias']:,})"
             ).replace(",", " "),
-            "help": (
-                "46,4% das ocorrências não têm causa preenchida "
-                "em TipoCausa."
-            ),
+            "help": texto_sem_causa,
         },
         {
             "titulo": "Distrito com mais ocorrências naturais",
@@ -111,15 +116,14 @@ def mostrar_visao_geral(gdf, dados):
                 f"{distrito_natural['Distrito']} "
                 f"({distrito_natural['Ocorrencias']:,})"
             ).replace(",", " "),
-            "help": (
-                "46,4% das ocorrências não têm causa preenchida "
-                "em TipoCausa."
-            ),
+            "help": texto_sem_causa,
         },
     ]
 
     mostrar_metricas(metricas)
 
+    # ====== Distribuição mensal ======
+    # O reindex garante os 12 meses, mesmo que algum não tenha ocorrências
     dados_mensais = (
         gdf.groupby("Mes")
         .size()
@@ -150,7 +154,7 @@ def mostrar_visao_geral(gdf, dados):
         customdata=dados_mensais["Ocorrencias"].map(formatar_numero),
         hovertemplate="<b>%{x}: %{customdata} ocorrências</b><extra></extra>",
         hoverlabel=dict(
-            font_size=14
+            font_size=FONT_HOVER
         )
     )
 
@@ -171,6 +175,7 @@ def mostrar_evolucao_temporal(dados):
     """
     dados["AreaMilHa"] = dados["AreaHa"] / 1000
 
+    # ====== Evolução anual ======
     fig_ocorrencias = go.Figure()
 
     fig_ocorrencias.add_trace(
@@ -196,6 +201,7 @@ def mostrar_evolucao_temporal(dados):
         yaxis_title="Número de ocorrências",
         hovermode="x",
         margin=dict(t=60, b=40, l=60, r=20),
+            hoverlabel=dict(font_size=FONT_HOVER),
         height=400,
     )
 
@@ -225,6 +231,7 @@ def mostrar_evolucao_temporal(dados):
         yaxis_title="Área ardida (mil ha)",
         hovermode="x",
         margin=dict(t=60, b=40, l=60, r=20),
+        hoverlabel=dict(font_size=FONT_HOVER),
         height=400,
     )
 
@@ -233,11 +240,14 @@ def mostrar_evolucao_temporal(dados):
         width="stretch",
     )
 
+
+    # ====== Relação entre ocorrências e área ardida ======
     correlacao_pearson = dados["Ocorrencias"].corr(
         dados["AreaMilHa"],
         method="pearson",
     )
 
+    # Spearman = Pearson calculado sobre as posições (ranks) dos valores
     correlacao_spearman = (
         dados["Ocorrencias"].rank().corr(
             dados["AreaMilHa"].rank()
@@ -266,6 +276,7 @@ def mostrar_evolucao_temporal(dados):
     x = dados["Ocorrencias"].to_numpy()
     y = dados["AreaMilHa"].to_numpy()
 
+    # Reta de regressão linear (grau 1) desenhada com 100 pontos
     coeficientes = np.polyfit(x, y, 1)
     tendencia = np.poly1d(coeficientes)
 
@@ -288,6 +299,7 @@ def mostrar_evolucao_temporal(dados):
         yaxis_title="Área ardida (mil ha)",
         hovermode="closest",
         margin=dict(t=60, b=40, l=60, r=20),
+        hoverlabel=dict(font_size=FONT_HOVER),
         height=400,
     )
 
@@ -326,84 +338,101 @@ def mostrar_distribuicao_geografica(hexagonos):
     Apresenta a distribuição geográfica das ocorrências através de
     hexágonos classificados por quintis de concentração.
 
+    Quando todos os hexágonos têm o mesmo número de ocorrências, é
+    apresentada uma única classe de concentração, em vez de criar
+    quintis sem variação suficiente.
+
     :param hexagonos: GeoDataFrame com os hexágonos e o número de
         ocorrências em cada um.
     :returns: None.
     """
     hexagonos = hexagonos.copy()
+    total_ocorrencias = int(hexagonos["Ocorrencias"].sum())
 
-    faixas = pd.qcut(
-        hexagonos["Ocorrencias"],
-        q=5,
-        duplicates="drop",
-    )
+    # ====== Classes de concentração ======
+    if hexagonos["Ocorrencias"].nunique() <= 1:
+        valor = formatar_numero(hexagonos["Ocorrencias"].iloc[0])
+        rotulo_unico = f"Concentração uniforme ({valor})"
 
-    intervalos = faixas.cat.categories
-
-    nomes_classes = [
-        "Muito baixa",
-        "Baixa",
-        "Média",
-        "Alta",
-        "Muito alta",
-    ][:len(intervalos)]
-
-    mapa_classes = {
-        str(intervalo): nome
-        for intervalo, nome in zip(intervalos, nomes_classes)
-    }
-
-    hexagonos["ClasseConcentracao"] = (
-        faixas.astype(str).map(mapa_classes)
-    )
-
-    limites_classes = (
-        hexagonos.groupby(
-            "ClasseConcentracao",
-            observed=True,
-        )["Ocorrencias"]
-        .agg(["min", "max"])
-        .reindex(nomes_classes)
-    )
-
-    rotulos_classes = []
-
-    for classe in nomes_classes:
-        minimo = limites_classes.loc[classe, "min"]
-        maximo = limites_classes.loc[classe, "max"]
-
-        rotulos_classes.append(
-            f"{classe} "
-            f"({formatar_numero(minimo)}–{formatar_numero(maximo)})"
+        hexagonos["ClasseConcentracao"] = rotulo_unico
+        ordem_classes = [rotulo_unico]
+        paleta = ["#32A836"]
+    else:
+        # Permite menos de 5 classes quando há muitos valores repetidos.
+        faixas = pd.qcut(
+            hexagonos["Ocorrencias"],
+            q=5,
+            duplicates="drop",
         )
 
-    mapa_rotulos = dict(
-        zip(nomes_classes, rotulos_classes)
-    )
+        intervalos = faixas.cat.categories
 
-    hexagonos["ClasseConcentracao"] = (
-        hexagonos["ClasseConcentracao"].map(mapa_rotulos)
-    )
+        nomes_classes = [
+            "Muito baixa",
+            "Baixa",
+            "Média",
+            "Alta",
+            "Muito alta",
+        ][:len(intervalos)]
 
-    ordem_classes = rotulos_classes
+        mapa_classes = {
+            str(intervalo): nome
+            for intervalo, nome in zip(intervalos, nomes_classes)
+        }
+
+        hexagonos["ClasseConcentracao"] = (
+            faixas.astype(str).map(mapa_classes)
+        )
+
+        limites_classes = (
+            hexagonos.groupby(
+                "ClasseConcentracao",
+                observed=True,
+            )["Ocorrencias"]
+            .agg(["min", "max"])
+            .reindex(nomes_classes)
+        )
+
+        rotulos_classes = []
+
+        for classe in nomes_classes:
+            minimo = limites_classes.loc[classe, "min"]
+            maximo = limites_classes.loc[classe, "max"]
+
+            rotulos_classes.append(
+                f"{classe} "
+                f"({formatar_numero(minimo)}–{formatar_numero(maximo)})"
+            )
+
+        mapa_rotulos = dict(
+            zip(nomes_classes, rotulos_classes)
+        )
+
+        hexagonos["ClasseConcentracao"] = (
+            hexagonos["ClasseConcentracao"].map(mapa_rotulos)
+        )
+
+        ordem_classes = rotulos_classes
+        paleta = PALETA[:len(ordem_classes)]
 
     hexagonos["OcorrenciasFormatadas"] = (
         hexagonos["Ocorrencias"].map(formatar_numero)
     )
 
-    centro = hexagonos.geometry.union_all().centroid
+    # ====== Centro do mapa ======
+    # Usa o centro da caixa envolvente, evitando a união dos hexágonos.
+    minx, miny, maxx, maxy = hexagonos.total_bounds
+    centro_lat = (miny + maxy) / 2
+    centro_lon = (minx + maxx) / 2
 
-    paleta = [
-        "#32A836",
-        "#FEE91A",
-        "#F38200",
-        "#D83E39",
-        "#8A364D",
-    ]
+    # ====== GeoJSON ======
+    # Envia apenas as geometrias, pois os valores são associados pelo índice.
+    geojson = hexagonos[["geometry"]].__geo_interface__
 
+    # ====== Construção do mapa ======
     mapa = px.choropleth_map(
         hexagonos,
-        geojson=hexagonos.__geo_interface__,
+        geojson=geojson,
         locations=hexagonos.index,
         color="ClasseConcentracao",
         category_orders={
@@ -412,8 +441,8 @@ def mostrar_distribuicao_geografica(hexagonos):
         color_discrete_sequence=paleta,
         map_style="open-street-map",
         center={
-            "lat": centro.y,
-            "lon": centro.x,
+            "lat": centro_lat,
+            "lon": centro_lon,
         },
         zoom=7,
         opacity=0.7,
@@ -432,7 +461,11 @@ def mostrar_distribuicao_geografica(hexagonos):
     )
 
     mapa.update_layout(
-        margin={"r": 0, "t": 0, "l": 0, "b": 0,}
+        margin={"r": 0, "t": 0, "l": 0, "b": 0},
+        legend_title_text=(
+            "Concentração de ocorrências"
+            f"<br>Total: {formatar_numero(total_ocorrencias)}"
+        ),
     )
 
     st.plotly_chart(
@@ -463,6 +496,8 @@ def mostrar_perigo_incendio(gdf):
         "Extremo",
     ]
 
+    # ====== Ocorrências por nível de perigo ======
+    # O reindex mantém a ordem dos níveis e inclui os que não têm registos
     dados_fwi_ocorrencias = (
         gdf["ClasseFWI"]
         .value_counts()
@@ -475,29 +510,38 @@ def mostrar_perigo_incendio(gdf):
         "Ocorrencias",
     ]
 
-    fig_ocorrencias = px.bar(
+    fig_ocorrencias = px.pie(
         dados_fwi_ocorrencias,
-        x="Ocorrencias",
-        y="ClasseFWI",
-        orientation="h",
+        names="ClasseFWI",
+        values="Ocorrencias",
         category_orders={
             "ClasseFWI": ordem_fwi,
         },
-        labels={
-            "ClasseFWI": "Nível de perigo",
-            "Ocorrencias": "Ocorrências",
-        },
+        color="ClasseFWI",
+        color_discrete_sequence=PALETA,
         title="Ocorrências por nível de perigo do FWI",
     )
 
+    # sort=False mantém a ordem de Baixo a Extremo em vez de ordenar por tamanho
     fig_ocorrencias.update_traces(
-        hovertemplate=(
-            "<b>Ocorrências: %{customdata}</b>"
-            "<extra></extra>"
-        ),
+        sort=False,
+        textinfo="label+percent",
+        textposition="inside",
+        textfont_size=16,
         customdata=dados_fwi_ocorrencias["Ocorrencias"].map(
             formatar_numero
         ),
+        hovertemplate=(
+            "<b>%{label}: %{customdata} ocorrências "
+            "(%{percent})</b><extra></extra>"
+        ),
+    )
+    
+    fig_ocorrencias.update_layout(
+        height=600,
+        showlegend=False,
+        margin=dict(t=60, b=20, l=20, r=20),
+        hoverlabel=dict(font_size=FONT_HOVER),
     )
 
     st.plotly_chart(
@@ -505,6 +549,7 @@ def mostrar_perigo_incendio(gdf):
         width="stretch",
     )
 
+    # ====== Área ardida por nível de perigo ======
     dados_fwi_area = (
         gdf.groupby("ClasseFWI", dropna=False)["AreaTotal"]
         .sum()
@@ -544,6 +589,7 @@ def mostrar_perigo_incendio(gdf):
         customdata=dados_fwi_area["AreaHa"].map(
             formatar_numero
         ),
+        hoverlabel=dict(font_size=FONT_HOVER),
     )
 
     st.plotly_chart(
