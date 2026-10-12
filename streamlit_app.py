@@ -37,14 +37,14 @@ def main():
     """
     # ====== Configuração da página ======
     st.set_page_config(
-        page_title="Incêndios Florestais PT 🇵🇹",
+        page_title="Incêndios Florestais PT",
         page_icon=PNG_FAVICON,
         layout="wide",
     )
 
     st.html(CSS_ESTILOS)
     st.title(
-        "Incêndios Florestais em Portugal 🇵🇹",
+        "Incêndios Florestais em Portugal",
         text_alignment="center"
     )
 
