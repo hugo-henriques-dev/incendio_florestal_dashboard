@@ -11,7 +11,6 @@ Dashboard interativo sobre incêndios florestais em Portugal, construído com St
 * **Distribuição geográfica:** mapa de hexágonos com filtros por ano, área, causa e localização.
 * **Perigo de incêndio:** ocorrências e área ardida por nível de FWI.
 * **Previsão:** mapa da probabilidade estimada de cada concelho ter pelo menos uma ocorrência num dado mês do ano seguinte ao último ano completo, e perfil sazonal do concelho escolhido.
-* **Dados:** tabela das ocorrências.
 
 ## Como funciona
 

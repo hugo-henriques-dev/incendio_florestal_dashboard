@@ -70,7 +70,7 @@ def _descarregar_ficheiro(nome_ficheiro):
 
 # Nas funções seguintes, o ficheiro local tem prioridade (desenvolvimento);
 # o Supabase é o fallback quando a aplicação corre sem os dados locais
-@st.cache_data
+@st.cache_resource
 def carregar_ocorrencias():
     """
     Carrega o dataset de ocorrências.

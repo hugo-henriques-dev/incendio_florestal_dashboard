@@ -10,6 +10,7 @@ ferramentas/validar_dados.py.
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from pyproj import Transformer
 import shapely
 
 from constantes import (
@@ -156,14 +157,22 @@ def agregar_em_hexagonos(gdf):
     :returns: GeoDataFrame com os hexágonos e o número de ocorrências
         em cada um.
     """
-    pontos = gdf.geometry[gdf.geometry.notna()].to_crs("EPSG:3763")
-
     # Para um hexágono flat-top, a largura de lado a lado é 2 * lado.
     lado = (LARGURA_HEXAGONO_KM * 1000) / 2
 
-    # ====== Atribuição de cada ocorrência a um hexágono ======
-    x = pontos.x.to_numpy()
-    y = pontos.y.to_numpy()
+    # Transforma as coordenadas diretamente em arrays, sem criar um Point
+    # novo por ocorrência.
+    validos = gdf.geometry[gdf.geometry.notna()]
+
+    transformador = Transformer.from_crs(
+        validos.crs,
+        "EPSG:3763",
+        always_xy=True,
+    )
+    x, y = transformador.transform(
+        validos.x.to_numpy(),
+        validos.y.to_numpy(),
+    )
 
     # Coordenadas axiais do sistema hexagonal.
     q = (2 / 3) * x / lado

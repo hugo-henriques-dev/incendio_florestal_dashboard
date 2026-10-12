@@ -63,7 +63,6 @@ def main():
         "distribuicao": "Distribuição geográfica",
         "perigo": "Perigo de Incêndio",
         "previsao": f"Probabilidade estimada de incêndio em {ano_previsao}",
-        "dados": "Dados",
     }
 
     view = st.selectbox(
@@ -92,7 +91,7 @@ def main():
                 freguesia,
             ) = obter_filtros_distribuicao(gdf)
 
-            dados_filtrados = gdf.copy()
+            dados_filtrados = gdf
 
             ano_min_disponivel = int(gdf["Ano"].min())
             ano_max_disponivel = int(gdf["Ano"].max())
@@ -147,9 +146,6 @@ def main():
         case "previsao":
             municipios = carregar_municipios_caop()
             mostrar_previsao(probabilidades, municipios)
-
-        case "dados":
-            st.dataframe(gdf.drop(columns="geometry"))
 
     mostrar_footer()
 

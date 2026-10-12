@@ -177,6 +177,9 @@ def filtrar_localizacao(gdf, distrito="Todos", concelho="Todos", freguesia="Toda
     Restringe o GeoDataFrame aos níveis de localização diferentes de
     "Todos"/"Todas".
 
+    Quando nenhum nível está selecionado, devolve o próprio GeoDataFrame
+    recebido, sem cópia. Não altera o GeoDataFrame recebido.
+
     :param gdf: GeoDataFrame a filtrar.
     :param distrito: Distrito selecionado, ou "Todos".
     :param concelho: Concelho selecionado, ou "Todos".
