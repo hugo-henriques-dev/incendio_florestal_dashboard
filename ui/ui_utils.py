@@ -5,17 +5,21 @@ evitar duplicação de lógica de formatação e apresentação.
 
 import streamlit as st
 
+from constantes import COR_SEM_OCORRENCIAS, LIMITES_PROBABILIDADE, PALETA
+
 
 def formatar_numero(valor, casas=0):
     """
-    Formata um número com separador de milhar em espaço, em vez de
-    vírgula, seguindo a convenção portuguesa.
+    Formata um número de acordo com a convenção portuguesa, utilizando
+    espaços como separadores de milhares e vírgulas como separadores decimais.
 
     :param valor: Número a formatar.
     :param casas: Número de casas decimais a mostrar.
     :returns: String formatada, ex.: "824 875".
     """
-    return f"{valor:,.{casas}f}".replace(",", " ")
+    return (
+        f"{valor:,.{casas}f}".replace(",", " ").replace(".", ",")
+    )
 
 
 def obter_distrito_top_causa(distritos_causa, tipo_causa):
@@ -34,6 +38,84 @@ def obter_distrito_top_causa(distritos_causa, tipo_causa):
         distritos_causa[distritos_causa["TipoCausa"] == tipo_causa]
         .sort_values("Ocorrencias", ascending=False)
         .iloc[0]
+    )
+
+
+def mostrar_legenda_probabilidade(contagens, n_sem_ocorrencias):
+    """
+    Apresenta a legenda do mapa de probabilidade estimada, com uma cor
+    por classe de probabilidade e o número de concelhos em cada uma.
+
+    Os rótulos das classes são construídos a partir de
+    LIMITES_PROBABILIDADE e as cores vêm de PALETA, pela mesma ordem
+    usada para colorir o mapa. Quando o mês tem concelhos sem qualquer
+    ocorrência registada, acrescenta uma entrada com a respetiva cor.
+
+    :param contagens: Número de concelhos em cada classe de
+        probabilidade, pela ordem de PALETA.
+    :param n_sem_ocorrencias: Número de concelhos sem ocorrências no mês.
+    :returns: None.
+    """
+    limites_pct = [
+        formatar_numero(limite * 100)
+        for limite in LIMITES_PROBABILIDADE
+    ]
+
+    rotulos = [
+        f"Menos de {limites_pct[0]}%",
+        *[
+            f"De {inferior}% a menos de {superior}%"
+            for inferior, superior in zip(
+                limites_pct,
+                limites_pct[1:],
+            )
+        ],
+        f"{limites_pct[-1]}% ou mais",
+    ]
+
+    entradas = [
+        (cor, f"{rotulo} ({n})")
+        for cor, rotulo, n in zip(PALETA, rotulos, contagens)
+    ]
+
+    # Os concelhos sem registos ficam no topo da legenda, antes das classes
+    if n_sem_ocorrencias > 0:
+        entradas.insert(
+            0,
+            (
+                COR_SEM_OCORRENCIAS,
+                f"Sem ocorrências registadas ({n_sem_ocorrencias})",
+            ),
+        )
+
+    itens = "".join(
+        f"""
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span style="
+                display:inline-block;
+                width:16px;
+                height:12px;
+                flex-shrink:0;
+                border-radius:2px;
+                background:{cor};
+            "></span>
+            <span>{rotulo}</span>
+        </div>
+        """
+        for cor, rotulo in entradas
+    )
+
+    st.html(
+        f"""
+        <div style="font-size:0.85rem;line-height:1.5;">
+            <div style="font-weight:600;margin-bottom:10px;">
+                Probabilidade estimada
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+                {itens}
+            </div>
+        </div>
+        """
     )
 
 
@@ -95,6 +177,20 @@ def mostrar_footer():
                 >
                     ICNF
                 </a>
+            </div>
+
+            <div>
+                Mapa de concelhos:
+                Informação geográfica cedida pela Direção-Geral do Território
+                (<a
+                    href="https://snig.dgterritorio.gov.pt/rndg/srv/por/catalog.search#/metadata/198497815bf647ecaa990c34c42e932e"
+                    target="_blank"
+                >CAOP 2025</a>,
+                licença
+                <a
+                    href="https://creativecommons.org/licenses/by/4.0/"
+                    target="_blank"
+                >CC BY 4.0</a>), adaptada.
             </div>
 
             <div>

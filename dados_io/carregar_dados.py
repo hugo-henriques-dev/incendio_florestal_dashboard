@@ -11,10 +11,12 @@ import streamlit as st
 
 from constantes import (
     BUCKET_SUPABASE,
+    FICHEIRO_CAOP_MUNICIPIOS,
     FICHEIRO_DISTRIBUICAO_GEO,
     FICHEIRO_DISTRIBUICAO_GEO_RECENTE,
     FICHEIRO_EVOLUCAO_ANUAL,
     FICHEIRO_FOGOS,
+    FICHEIRO_PREVISAO_PROBABILIDADES,
 )
 
 
@@ -136,4 +138,44 @@ def carregar_distribuicao_geo_recente():
 
     return gpd.read_parquet(
         _descarregar_ficheiro("distribuicao_geografica_recente.parquet")
+    )
+
+
+@st.cache_data
+def carregar_probabilidades_previsao():
+    """
+    Carrega o dataset com a probabilidade estimada de ocorrência de
+    incêndios por concelho e mês.
+
+    Usa o ficheiro local quando disponível; caso contrário, usa o
+    Supabase Storage.
+
+    :returns: DataFrame com uma linha por concelho e mês, e as colunas
+        que descrevem o ano previsto e o histórico usado.
+    """
+    if FICHEIRO_PREVISAO_PROBABILIDADES.exists():
+        return pd.read_parquet(FICHEIRO_PREVISAO_PROBABILIDADES)
+
+    return pd.read_parquet(
+        _descarregar_ficheiro("previsao_probabilidades.parquet")
+    )
+
+
+@st.cache_data
+def carregar_municipios_caop():
+    """
+    Carrega a geometria simplificada dos municípios da CAOP, usada no
+    mapa de previsão.
+
+    Usa o ficheiro local quando disponível; caso contrário, usa o
+    Supabase Storage.
+
+    :returns: GeoDataFrame com uma linha por município, identificado
+        na coluna municipio.
+    """
+    if FICHEIRO_CAOP_MUNICIPIOS.exists():
+        return gpd.read_parquet(FICHEIRO_CAOP_MUNICIPIOS)
+
+    return gpd.read_parquet(
+        _descarregar_ficheiro("caop_municipios.parquet")
     )

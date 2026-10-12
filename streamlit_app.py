@@ -10,7 +10,9 @@ from dados_io.carregar_dados import (
     carregar_distribuicao_geo,
     carregar_distribuicao_geo_recente,
     carregar_evolucao_anual,
-    carregar_ocorrencias
+    carregar_municipios_caop,
+    carregar_ocorrencias,
+    carregar_probabilidades_previsao
 )
 from etl.processar_dados import agregar_em_hexagonos
 from ui.filtros import filtrar_localizacao, obter_filtros_distribuicao
@@ -19,6 +21,7 @@ from ui.views import (
     mostrar_distribuicao_geografica,
     mostrar_evolucao_temporal,
     mostrar_perigo_incendio,
+    mostrar_previsao,
     mostrar_visao_geral
 )
 
@@ -34,43 +37,52 @@ def main():
     """
     # ====== Configuração da página ======
     st.set_page_config(
-        page_title="Incêndios Florestais PT",
+        page_title="Incêndios Florestais PT 🇵🇹",
         page_icon=PNG_FAVICON,
         layout="wide",
     )
 
     st.html(CSS_ESTILOS)
     st.title(
-        "Incêndios Florestais em Portugal",
-        text_alignment="center",
+        "Incêndios Florestais em Portugal 🇵🇹",
+        text_alignment="center"
     )
 
     # ====== Dados base e navegação ======
     # Ocorrências carregadas uma vez, pois são usadas por várias views
     gdf = carregar_ocorrencias()
 
+    # Carregadas aqui, e não na view, porque o ano da previsão faz parte
+    # do rótulo da navegação
+    probabilidades = carregar_probabilidades_previsao()
+    ano_previsao = int(probabilidades["AnoPrevisao"].iloc[0])
+
+    labels_view = {
+        "visao_geral": "Visão geral",
+        "evolucao": "Evolução temporal",
+        "distribuicao": "Distribuição geográfica",
+        "perigo": "Perigo de Incêndio",
+        "previsao": f"Probabilidade estimada de incêndio em {ano_previsao}",
+        "dados": "Dados",
+    }
+
     view = st.selectbox(
         "Visualização",
-        [
-            "Visão geral",
-            "Evolução temporal",
-            "Distribuição geográfica",
-            "Perigo de Incêndio",
-            "Dados",
-        ],
+        labels_view,
+        format_func=lambda chave: labels_view[chave],
     )
 
     # ====== Renderização da view selecionada ======
     match view:
-        case "Visão geral":
+        case "visao_geral":
             dados = carregar_evolucao_anual()
             mostrar_visao_geral(gdf, dados)
 
-        case "Evolução temporal":
+        case "evolucao":
             dados = carregar_evolucao_anual()
             mostrar_evolucao_temporal(dados)
 
-        case "Distribuição geográfica":
+        case "distribuicao":
             (
                 intervalo_anos,
                 classe_area,
@@ -129,11 +141,14 @@ def main():
 
                 mostrar_distribuicao_geografica(hexagonos)
 
-        case "Perigo de Incêndio":
+        case "perigo":
             mostrar_perigo_incendio(gdf)
 
-        case "Dados":
-            st.html("<span id='sei-la'>Uns Dados</span>")
+        case "previsao":
+            municipios = carregar_municipios_caop()
+            mostrar_previsao(probabilidades, municipios)
+
+        case "dados":
             st.dataframe(gdf.drop(columns="geometry"))
 
     mostrar_footer()

@@ -7,10 +7,19 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import pydeck as pdk
 
-from constantes import FONT_HOVER, PALETA
+from constantes import (
+    COR_SEM_OCORRENCIAS,
+    FONT_HOVER,
+    LIMITES_PROBABILIDADE,
+    MESES,
+    MESES_ABREVIADOS,
+    PALETA
+)
 from ui.ui_utils import (
     formatar_numero,
+    mostrar_legenda_probabilidade,
     mostrar_metricas,
     obter_distrito_top_causa,
 )
@@ -55,8 +64,8 @@ def mostrar_visao_geral(gdf, dados):
     # sem causa não entram nesses valores
     percent_sem_causa = gdf["TipoCausa"].isna().mean() * 100
     texto_sem_causa = (
-        f"{percent_sem_causa:.1f}".replace(".", ",")
-        + "% das ocorrências não têm causa preenchida em TipoCausa."
+        f"{formatar_numero(percent_sem_causa, 1)}%"
+        " das ocorrências não têm causa preenchida em TipoCausa."
     )
 
     distrito_intencional = obter_distrito_top_causa(distritos_causa, "Intencional")
@@ -66,11 +75,11 @@ def mostrar_visao_geral(gdf, dados):
     metricas = [
         {
             "titulo": "Ocorrências",
-            "valor": f"{total_ocorrencias:,}".replace(",", " "),
+            "valor": formatar_numero(total_ocorrencias),
         },
         {
             "titulo": "Área ardida",
-            "valor": f"{area_total:,.0f} ha".replace(",", " "),
+            "valor": f"{formatar_numero(area_total)} ha",
         },
         {
             "titulo": "Período",
@@ -78,49 +87,50 @@ def mostrar_visao_geral(gdf, dados):
         },
         {
             "titulo": "Média anual de área ardida",
-            "valor": f"{media_area_anual:,.0f} ha".replace(",", " "),
+            "valor": f"{formatar_numero(media_area_anual)} ha",
         },
         {
             "titulo": "Ano com maior área ardida",
             "valor": (
                 f"{ano_maior_area} "
-                f"({maior_area / 1000:,.0f} mil ha)"
-            ).replace(",", " "),
+                f"({formatar_numero(maior_area / 1000)} mil ha)"
+            ),
         },
         {
             "titulo": "Ano com mais ocorrências",
             "valor": (
                 f"{ano_mais_ocorrencias} "
-                f"({mais_ocorrencias:,})"
-            ).replace(",", " "),
+                f"({formatar_numero(mais_ocorrencias)})"
+            ),
         },
         {
             "titulo": "Distrito com mais ocorrências intencionais",
             "valor": (
                 f"{distrito_intencional['Distrito']} "
-                f"({distrito_intencional['Ocorrencias']:,})"
-            ).replace(",", " "),
+                f"({formatar_numero(distrito_intencional['Ocorrencias'])})"
+            ),
             "help": texto_sem_causa,
         },
         {
             "titulo": "Distrito com mais ocorrências negligentes",
             "valor": (
                 f"{distrito_negligente['Distrito']} "
-                f"({distrito_negligente['Ocorrencias']:,})"
-            ).replace(",", " "),
+                f"({formatar_numero(distrito_negligente['Ocorrencias'])})"
+            ),
             "help": texto_sem_causa,
         },
         {
             "titulo": "Distrito com mais ocorrências naturais",
             "valor": (
                 f"{distrito_natural['Distrito']} "
-                f"({distrito_natural['Ocorrencias']:,})"
-            ).replace(",", " "),
+                f"({formatar_numero(distrito_natural['Ocorrencias'])})"
+            ),
             "help": texto_sem_causa,
         },
     ]
 
     mostrar_metricas(metricas)
+    st.write("---")
 
     # ====== Distribuição mensal ======
     # O reindex garante os 12 meses, mesmo que algum não tenha ocorrências
@@ -131,13 +141,7 @@ def mostrar_visao_geral(gdf, dados):
         .reset_index(name="Ocorrencias")
     )
 
-    meses = (
-        "Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"
-    )
-
-    dados_mensais["Mes"] = dados_mensais["Mes"].map(
-        dict(enumerate(meses, start=1))
-    )
+    dados_mensais["Mes"] = dados_mensais["Mes"].map(MESES_ABREVIADOS)
 
     fig = px.bar(
         dados_mensais,
@@ -210,6 +214,7 @@ def mostrar_evolucao_temporal(dados):
         width="stretch",
     )
 
+    st.write("---")
     fig_area = go.Figure()
 
     fig_area.add_trace(
@@ -240,6 +245,7 @@ def mostrar_evolucao_temporal(dados):
         width="stretch",
     )
 
+    st.write("---")
 
     # ====== Relação entre ocorrências e área ardida ======
     correlacao_pearson = dados["Ocorrencias"].corr(
@@ -356,7 +362,6 @@ def mostrar_distribuicao_geografica(hexagonos):
 
         hexagonos["ClasseConcentracao"] = rotulo_unico
         ordem_classes = [rotulo_unico]
-        paleta = ["#32A836"]
     else:
         # Permite menos de 5 classes quando há muitos valores repetidos.
         faixas = pd.qcut(
@@ -413,7 +418,8 @@ def mostrar_distribuicao_geografica(hexagonos):
         )
 
         ordem_classes = rotulos_classes
-        paleta = PALETA[:len(ordem_classes)]
+    
+    paleta = PALETA[:len(ordem_classes)]
 
     hexagonos["OcorrenciasFormatadas"] = (
         hexagonos["Ocorrencias"].map(formatar_numero)
@@ -463,8 +469,9 @@ def mostrar_distribuicao_geografica(hexagonos):
     mapa.update_layout(
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
         legend_title_text=(
-            "Concentração de ocorrências"
-            f"<br>Total: {formatar_numero(total_ocorrencias)}"
+            "<b>Concentração de ocorrências</b>"
+            f"<br>Total de ocorrências: {formatar_numero(total_ocorrencias)}"
+            f"<br><br>Total de hexágonos: {formatar_numero(len(hexagonos))}"
         ),
     )
 
@@ -483,8 +490,12 @@ def mostrar_perigo_incendio(gdf):
     :returns: None.
     """
     st.write(
-        "Fire Weather Index (FWI) - índice meteorológico de perigo de incêndio "
-        "que indica o potencial de ignição e propagação do fogo com base nas "
+        "Fire Weather Index ([FWI]("
+        "https://fogos.icnf.pt/localizador/legenda/Indices_FWI.pdf "
+        "\"Índice Meteorológico de Perigo de Incêndio "
+        "(documento PDF do ICNF)\"))"
+        " - índice meteorológico de perigo de incêndio que indica "
+        "o potencial de ignição e propagação do fogo com base nas "
         "condições meteorológicas."
     )
 
@@ -565,6 +576,14 @@ def mostrar_perigo_incendio(gdf):
     dados_fwi_area["AreaMilHa"] = (
         dados_fwi_area["AreaHa"] / 1000
     )
+    
+    dados_fwi_area["AreaHaTexto"] = dados_fwi_area["AreaHa"].map(
+        formatar_numero
+    )
+
+    dados_fwi_area["AreaHaTexto"] = dados_fwi_area["AreaHa"].map(
+        formatar_numero
+    )
 
     fig_area = px.bar(
         dados_fwi_area,
@@ -579,20 +598,342 @@ def mostrar_perigo_incendio(gdf):
             "AreaMilHa": "Área ardida (mil ha)",
         },
         title="Área ardida por nível de perigo do FWI",
+        color="ClasseFWI",
+        color_discrete_map=dict(zip(ordem_fwi, PALETA)),
+        custom_data=["AreaHaTexto"],
     )
 
     fig_area.update_traces(
         hovertemplate=(
-            "<b>Área ardida: %{customdata} ha</b>"
+            "<b>Área ardida: %{customdata[0]} ha</b>"
             "<extra></extra>"
-        ),
-        customdata=dados_fwi_area["AreaHa"].map(
-            formatar_numero
         ),
         hoverlabel=dict(font_size=FONT_HOVER),
     )
 
     st.plotly_chart(
         fig_area,
+        width="stretch",
+    )
+
+
+def mostrar_previsao(probabilidades, municipios):
+    """
+    Apresenta a vista de previsão, incluindo o mapa de probabilidades
+    por concelho e o perfil sazonal do concelho selecionado.
+
+    :param probabilidades: DataFrame com as probabilidades estimadas
+        por concelho e mês, e o período do histórico, calculados no ETL.
+    :param municipios: GeoDataFrame com a geometria dos municípios.
+    :returns: None.
+    """
+    _mostrar_mapa_previsao(probabilidades, municipios)
+    _mostrar_perfil_sazonal(probabilidades)
+
+
+def _mostrar_mapa_previsao(probabilidades, municipios):
+    """
+    Apresenta o mapa da probabilidade estimada de ocorrência de incêndios
+    por concelho, para o mês selecionado.
+
+    A probabilidade é calculada no ETL como uma proporção ponderada dos
+    anos históricos em que houve pelo menos uma ocorrência nesse mês,
+    atribuindo maior peso aos anos mais recentes, segundo DECAIMENTO_ANUAL.
+    O ano da previsão e o período do histórico vêm da própria tabela, por
+    isso o texto corresponde sempre ao que foi calculado.
+
+    Os concelhos sem qualquer ocorrência registada no mês têm uma cor
+    própria e não entram na escala de classes.
+
+    :param probabilidades: DataFrame com a probabilidade estimada por
+        concelho e mês, calculada no ETL.
+    :param municipios: GeoDataFrame com a geometria dos municípios.
+    :returns: None.
+    :raises AssertionError: Se algum município da CAOP não tiver
+        probabilidade na tabela.
+    """
+    mes = st.selectbox(
+        "Mês",
+        MESES,
+        format_func=lambda chave: MESES[chave],
+    )
+
+    ano_previsao = probabilidades["AnoPrevisao"].iloc[0]
+    ano_inicial = probabilidades["AnoHistoricoInicial"].iloc[0]
+    ano_final = probabilidades["AnoHistoricoFinal"].iloc[0]
+
+    st.write(
+        f"""
+        Estimativa da probabilidade de cada concelho registar pelo menos
+        uma ocorrência em **{MESES[mes].lower()} de {ano_previsao}**,
+        com base nos registos de
+        **{ano_inicial}-{ano_final}**.
+        O ano {ano_previsao - 1} fica de fora por ter registos ainda por
+        completar.
+
+        Os anos mais recentes pesam mais, porque em testes com anos passados
+        foram melhor indicador do ano seguinte, e assume-se que o
+        padrão recente se mantém. Por isso, as estimativas acompanham as mudanças
+        de tendência com algum atraso, e o mapa serve sobretudo para comparar
+        concelhos e meses.
+        """
+    )
+
+    # Só os valores do mês selecionado, uma linha por concelho.
+    dados_concelho = probabilidades[
+        probabilidades["Mes"] == mes
+    ].drop(columns="Mes")
+
+    dados_mapa = municipios.merge(
+        dados_concelho,
+        left_on="municipio",
+        right_on="Concelho",
+        how="left",
+        validate="1:1",
+    )
+
+    # Falha cedo se algum município da CAOP não existir nos dados do ICNF.
+    assert dados_mapa["Probabilidade"].notna().all()
+
+    # ====== Classes e cores ======
+    # Cor de cada classe de PALETA, convertida de hexadecimal para RGB.
+    cores = [
+        [int(cor[i:i + 2], 16) for i in (1, 3, 5)]
+        for cor in PALETA
+    ]
+
+    # Classe de probabilidade (0 a 4) de cada concelho, segundo
+    # LIMITES_PROBABILIDADE.
+    classes = np.digitize(
+        dados_mapa["Probabilidade"],
+        LIMITES_PROBABILIDADE,
+    )
+
+    # Concelhos sem qualquer ocorrência no histórico do mês têm cor própria.
+    sem_ocorrencias = dados_mapa["AnosComOcorrencia"] == 0
+
+    cor_sem_ocorrencias = [
+        int(COR_SEM_OCORRENCIAS[i:i + 2], 16)
+        for i in (1, 3, 5)
+    ]
+
+    dados_mapa["cor"] = [
+        cor_sem_ocorrencias if sem else cores[classe]
+        for sem, classe in zip(sem_ocorrencias, classes)
+    ]
+
+    # Concelhos por classe de probabilidade, sem contar os que não têm
+    # registos, porque esses aparecem a cinzento.
+    contagens = np.bincount(
+        classes[~sem_ocorrencias.to_numpy()],
+        minlength=len(PALETA),
+    )
+
+    # Nos concelhos sem registos, o hover diz isso em vez de mostrar 0%.
+    dados_mapa["ProbabilidadeTexto"] = [
+        "sem ocorrências registadas" if sem
+        else f"{formatar_numero(p * 100, 1)}%"
+        for sem, p in zip(
+            sem_ocorrencias,
+            dados_mapa["Probabilidade"],
+        )
+    ]
+
+    dados_mapa["OcorrenciasTexto"] = (
+        dados_mapa["Ocorrencias"].map(formatar_numero)
+    )
+
+    # ====== Mapa ======
+    # Centro do mapa: centro da caixa envolvente dos municípios.
+    minx, miny, maxx, maxy = dados_mapa.total_bounds
+
+    # Só as colunas usadas na cor e no tooltip.
+    camada = pdk.Layer(
+        "GeoJsonLayer",
+        data=dados_mapa[
+            [
+                "municipio",
+                "AnosComOcorrencia",
+                "AnosHistoricos",
+                "ProbabilidadeTexto",
+                "OcorrenciasTexto",
+                "cor",
+                "geometry",
+            ]
+        ].__geo_interface__,
+        pickable=True,
+        stroked=True,
+        filled=True,
+        get_fill_color="properties.cor",
+        get_line_color=[90, 90, 90, 180],
+        line_width_min_pixels=1,
+    )
+
+    # O tooltip do pydeck não acompanha o tema do Streamlit, por isso as
+    # cores dele são escolhidas consoante o tema atual.
+    if st.context.theme.type == "dark":
+        estilo_tooltip = {
+            "backgroundColor": "#262730",
+            "color": "#fafafa",
+            "border": "1px solid #4a4d5a",
+        }
+    else:
+        estilo_tooltip = {
+            "backgroundColor": "#ffffff",
+            "color": "#2a3f5f",
+            "border": "1px solid #d3d3d3",
+        }
+
+    mapa = pdk.Deck(
+        layers=[camada],
+        map_style=None,
+        initial_view_state=pdk.ViewState(
+            latitude=(miny + maxy) / 2,
+            longitude=(minx + maxx) / 2,
+            zoom=6.3,
+        ),
+        tooltip={
+            "html": (
+                "<b>{municipio}</b><br>"
+                "Probabilidade estimada: {ProbabilidadeTexto}<br>"
+                "Anos com ocorrência: "
+                "{AnosComOcorrencia} de {AnosHistoricos}<br>"
+                "Total de ocorrências no mês: {OcorrenciasTexto}"
+            ),
+            "style": {
+                **estilo_tooltip,
+                "padding": "8px 10px",
+                "borderRadius": "2px",
+                "fontFamily": "Arial, sans-serif",
+                "fontSize": f"{FONT_HOVER}px",
+                "lineHeight": "1.3",
+                "whiteSpace": "nowrap",
+            },
+        },
+    )
+
+    # ====== Layout ======
+    col_mapa, col_legenda = st.columns([4, 1.3], gap="medium")
+
+    with col_mapa:
+        st.pydeck_chart(
+            mapa,
+            height=650,
+            width="stretch",
+            alt=(
+                "Mapa da probabilidade estimada de ocorrência de incêndios "
+                "por concelho, no mês selecionado."
+            ),
+        )
+
+    with col_legenda:
+        mostrar_legenda_probabilidade(
+            contagens,
+            int(sem_ocorrencias.sum()),
+        )
+
+
+def _mostrar_perfil_sazonal(probabilidades):
+    """
+    Apresenta a probabilidade estimada de ocorrência de incêndios em cada
+    mês do ano, para o concelho selecionado, com as cores das classes do
+    mapa.
+
+    Enquanto nenhum concelho estiver selecionado, o gráfico não é
+    apresentado.
+
+    :param probabilidades: DataFrame com a probabilidade estimada e os
+        indicadores históricos por concelho e mês, calculados no ETL.
+    :returns: None.
+    """
+    st.write(
+        """
+        ---
+        Probabilidade estimada de cada mês para o concelho escolhido,
+        com as cores da legenda do mapa.
+        """
+    )
+
+    concelho = st.selectbox(
+        "Concelho",
+        sorted(probabilidades["Concelho"].unique()),
+        index=None,
+        placeholder="Escolhe um concelho",
+        key="concelho_previsao",
+    )
+
+    # Sem concelho escolhido, não há gráfico para mostrar
+    if concelho is None:
+        return
+
+    dados = (
+        probabilidades[probabilidades["Concelho"] == concelho]
+        .sort_values("Mes")
+    )
+    total_anos_historicos = dados["AnosHistoricos"].iloc[0]
+
+    # Mesma classificação do mapa, para as cores coincidirem com a legenda
+    classes = np.digitize(
+        dados["Probabilidade"],
+        LIMITES_PROBABILIDADE,
+    )
+
+    sem_ocorrencias = dados["AnosComOcorrencia"] == 0
+
+    probabilidade_texto = [
+        "sem ocorrências registadas" if sem
+        else f"{formatar_numero(p * 100, 1)}%"
+        for sem, p in zip(
+            sem_ocorrencias,
+            dados["Probabilidade"],
+        )
+    ]
+
+    anos_ocorrencia_texto = dados["AnosComOcorrencia"].map(
+        lambda anos: (
+            f"{formatar_numero(anos)} de "
+            f"{formatar_numero(total_anos_historicos)}"
+        )
+    )
+
+    ocorrencias_texto = dados["Ocorrencias"].map(formatar_numero)
+    mes_texto = dados["Mes"].map(MESES)
+
+    customdata = list(zip(
+        mes_texto,
+        probabilidade_texto,
+        anos_ocorrencia_texto,
+        ocorrencias_texto,
+    ))
+
+    fig = go.Figure(
+        go.Bar(
+            x=dados["Mes"].map(MESES_ABREVIADOS),
+            y=dados["Probabilidade"] * 100,
+            marker_color=[PALETA[classe] for classe in classes],
+            customdata=customdata,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Probabilidade estimada: %{customdata[1]}<br>"
+                "Anos com ocorrência: %{customdata[2]}<br>"
+                "Total de ocorrências no mês: %{customdata[3]}"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    fig.update_layout(
+        title=f"Probabilidade estimada por mês - {concelho}",
+        xaxis_title="Mês",
+        yaxis_title="Probabilidade estimada (%)",
+        yaxis_range=[0, 100],
+        hovermode="x",
+        margin=dict(t=60, b=40, l=60, r=20),
+        hoverlabel=dict(font_size=FONT_HOVER),
+        height=400,
+    )
+
+    st.plotly_chart(
+        fig,
         width="stretch",
     )

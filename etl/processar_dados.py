@@ -1,7 +1,7 @@
 """
 Processa o GeoPackage bruto do ICNF, normalizando os campos necessários
-para o dashboard, e disponibiliza as funções de agregação em hexágonos
-e de classificação do FWI.
+para o dashboard, e disponibiliza as funções de agregação em hexágonos,
+de cálculo das probabilidades de previsão e de classificação do FWI.
 
 As regras de limpeza aplicadas aqui resultam da exploração feita em
 ferramentas/validar_dados.py.
@@ -15,6 +15,7 @@ import shapely
 from constantes import (
     COLUNAS_AUXILIARES_DURACAO,
     COLUNAS_PADRAO,
+    DECAIMENTO_ANUAL,
     DIR_PROCESSADOS,
     FICHEIRO_GPKG_BRUTO,
     FICHEIRO_FOGOS,
@@ -221,6 +222,92 @@ def agregar_em_hexagonos(gdf):
         geometry=geometrias,
         crs="EPSG:3763",
     ).to_crs("EPSG:4326")
+
+
+def calcular_probabilidades(dados, ano_atual):
+    """
+    Calcula a probabilidade estimada de ocorrência de incêndios por
+    concelho e mês.
+
+    A probabilidade é a proporção ponderada dos anos históricos em que
+    houve pelo menos uma ocorrência nesse concelho e mês. O peso de cada
+    ano decai com a sua idade, segundo DECAIMENTO_ANUAL, e só entram no
+    histórico os anos anteriores a ano_atual.
+
+    Todas as combinações de concelho e mês estão presentes no resultado;
+    as que não têm ocorrências no histórico ficam com Probabilidade 0.
+
+    :param dados: DataFrame com as colunas Concelho, Ano e Mes.
+    :param ano_atual: Ano em curso, excluído por ter registos incompletos.
+    :returns: DataFrame com uma linha por concelho e mês, com as colunas
+        Concelho, Mes, AnosComOcorrencia (anos do histórico com pelo menos
+        uma ocorrência), Ocorrencias (total de ocorrências no histórico) e
+        Probabilidade (entre 0 e 1), e ainda AnoPrevisao (ano_atual + 1),
+        AnoHistoricoInicial, AnoHistoricoFinal e AnosHistoricos, que
+        descrevem o ano previsto e o histórico usado e são iguais em todas
+        as linhas.
+    """
+    historico = dados[dados["Ano"] < ano_atual]
+    anos_historicos = historico["Ano"].dropna().astype(int)
+
+    # Peso de cada ano: decai com a distância a ano_atual - 1, o ano
+    # histórico mais recente, que fica com peso 1.
+    historico = historico.assign(
+        Peso=np.exp(-DECAIMENTO_ANUAL * (ano_atual - 1 - historico["Ano"]))
+    )
+    # Soma dos pesos de todos os anos históricos, contando cada ano uma vez.
+    peso_total = historico.drop_duplicates("Ano")["Peso"].sum()
+
+    # Registos sem mês ficam de fora, nos restantes o mês passa a inteiro (1 a 12).
+    historico = historico.dropna(subset=["Mes"])
+    historico = historico.assign(Mes=historico["Mes"].astype(int))
+
+    # Uma linha por concelho, mês e ano com pelo menos uma ocorrência.
+    # AnosComOcorrencia conta esses anos e PesoComOcorrencia soma o peso deles.
+    anos_com_ocorrencia = (
+        historico
+        .drop_duplicates(["Concelho", "Mes", "Ano"])
+        .groupby(["Concelho", "Mes"])
+        .agg(
+            AnosComOcorrencia=("Ano", "size"),
+            PesoComOcorrencia=("Peso", "sum"),
+        )
+    )
+
+    # Total de ocorrências por concelho e mês.
+    ocorrencias = (
+        historico
+        .groupby(["Concelho", "Mes"])
+        .size()
+        .rename("Ocorrencias")
+    )
+
+    # Todas as combinações de concelho e mês, mesmo sem ocorrências. Os
+    # concelhos vêm de dados (e não de historico) para que apareçam todos
+    # no mapa, incluindo os que só têm registos no ano em curso.
+    indice = pd.MultiIndex.from_product(
+        [dados["Concelho"].dropna().unique(), range(1, 13)],
+        names=["Concelho", "Mes"],
+    )
+
+    probabilidades = (
+        pd.concat([anos_com_ocorrencia, ocorrencias], axis=1)
+        .reindex(indice, fill_value=0)
+        .reset_index()
+    )
+
+    # Proporção do peso total correspondente aos anos com ocorrência (0 a 1).
+    probabilidades["Probabilidade"] = (
+        probabilidades.pop("PesoComOcorrencia") / peso_total
+    )
+
+    # Referência temporal da tabela, para o dashboard não depender do relógio.
+    probabilidades["AnoPrevisao"] = ano_atual + 1
+    probabilidades["AnoHistoricoInicial"] = anos_historicos.min()
+    probabilidades["AnoHistoricoFinal"] = anos_historicos.max()
+    probabilidades["AnosHistoricos"] = anos_historicos.nunique()
+
+    return probabilidades
 
 
 def classificar_fwi(valor):
