@@ -576,10 +576,6 @@ def mostrar_perigo_incendio(gdf):
     dados_fwi_area["AreaMilHa"] = (
         dados_fwi_area["AreaHa"] / 1000
     )
-    
-    dados_fwi_area["AreaHaTexto"] = dados_fwi_area["AreaHa"].map(
-        formatar_numero
-    )
 
     dados_fwi_area["AreaHaTexto"] = dados_fwi_area["AreaHa"].map(
         formatar_numero
